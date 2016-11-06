@@ -47,9 +47,8 @@
 # TF_BUILD_BAZEL_CLEAN, if set to any non-empty and non-0 value, directs the
 # script to perform bazel clean prior to main build and test steps.
 #
-# TF_BUILD_SERIAL_INSTALL_TESTS, if set to any non-empty and non-0 value,
-# will force the Python install tests to run serially, overriding than the
-# concurrent testing behavior.
+# TF_GPU_COUNT, Set the number of GPUs in the system. We run only this many
+# concurrent tests when running GPU tests.
 #
 # TF_BUILD_EXTRA_EXCLUSIVE_INSTALL_TESTS, add to the default list of
 # Python unit tests to run in exclusive mode (i.e., not concurrently with
@@ -92,7 +91,6 @@ PY_TEST_BLACKLIST="${PY_TEST_BLACKLIST}:"\
 "tensorflow/python/util/protobuf/compare_test.py:"\
 "tensorflow/python/framework/device_test.py:"\
 "tensorflow/python/framework/file_system_test.py:"\
-"tensorflow/contrib/learn/python/learn/tests/early_stopping_test.py:"\
 "tensorflow/contrib/quantization/python/dequantize_op_test.py:"\
 "tensorflow/contrib/quantization/python/quantized_conv_ops_test.py:"\
 "tensorflow/contrib/quantization/tools/quantize_graph_test.py:"\
@@ -101,9 +99,7 @@ PY_TEST_BLACKLIST="${PY_TEST_BLACKLIST}:"\
 "tensorflow/python/platform/default/_resource_loader_test.py:"\
 "tensorflow/python/platform/default/flags_test.py:"\
 "tensorflow/python/platform/default/logging_test.py:"\
-"tensorflow/python/platform/default/gfile_test.py:"\
-"tensorflow/contrib/learn/nonlinear_test.py:"\
-"tensorflow/contrib/learn/python/learn/tests/nonlinear_test.py"
+"tensorflow/contrib/learn/nonlinear_test.py:"
 
 # Test blacklist: GPU-only
 PY_TEST_GPU_BLACKLIST="${PY_TEST_GPU_BLACKLIST}:"\
@@ -113,8 +109,7 @@ PY_TEST_GPU_BLACKLIST="${PY_TEST_GPU_BLACKLIST}:"\
 
 # Tests that should be run in the exclusive mode (i.e., not parallel with
 # other tests)
-PY_TEST_EXCLUSIVE_LIST="tensorflow/python/platform/gfile_test.py:"\
-"tensorflow/python/platform/default/gfile_test.py"
+PY_TEST_EXCLUSIVE_LIST=""
 
 # Append custom list of exclusive tests
 if [[ ! -z "${TF_BUILD_EXTRA_EXCLUSIVE_INSTALL_TESTS}" ]]; then
@@ -133,6 +128,7 @@ echo "PY_TEST_GPU_BLACKLIST: ${PY_TEST_GPU_BLACKLIST}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/builds_common.sh"
 
+TF_GPU_COUNT=${TF_GPU_COUNT:-8}
 
 # Process input arguments
 IS_VIRTUALENV=0
@@ -411,21 +407,21 @@ SKIP_COUNTER=0
 FAILED_TESTS=""
 FAILED_TEST_LOGS=""
 
-N_JOBS=$(grep -c ^processor /proc/cpuinfo)
-if [[ -z ${N_JOBS} ]]; then
-  # Try the Mac way of getting number of CPUs
-  N_JOBS=$(sysctl -n hw.ncpu)
-fi
+if [[ "${IS_GPU}" == "1" ]]; then
+  N_JOBS=$TF_GPU_COUNT
+else
+  N_JOBS=$(grep -c ^processor /proc/cpuinfo)
+  if [[ -z ${N_JOBS} ]]; then
+    # Try the Mac way of getting number of CPUs
+    N_JOBS=$(sysctl -n hw.ncpu)
+  fi
 
-if [[ -z ${N_JOBS} ]]; then
-  N_JOBS=8
-  echo "Cannot determine the number of processors"
-  echo "Using default concurrent job counter ${N_JOBS}"
-fi
-
-if [[ ! -z "${TF_BUILD_SERIAL_INSTALL_TESTS}" ]] &&
-   [[ "${TF_BUILD_SERIAL_INSTALL_TESTS}" != "0" ]]; then
-  N_JOBS=1
+  # If still cannot determine the number of CPUs, pick 8.
+  if [[ -z ${N_JOBS} ]]; then
+    N_JOBS=8
+    echo "Cannot determine the number of processors"
+    echo "Using default concurrent job counter ${N_JOBS}"
+  fi
 fi
 
 echo "Running Python tests-on-install with ${N_JOBS} concurrent jobs..."
@@ -485,8 +481,14 @@ while true; do
     TEST_LOGS="${TEST_LOGS} ${TEST_LOG}"
 
     # Launch test asynchronously
-    "${SCRIPT_DIR}/py_test_delegate.sh" \
-      "${PYTHON_BIN_PATH}" "${PY_TEST_DIR}/${TEST_BASENAME}" "${TEST_LOG}" &
+    if [[ "${IS_GPU}" == "1" ]]; then
+      "${SCRIPT_DIR}/../gpu_build/parallel_gpu_execute.sh" \
+        "${SCRIPT_DIR}/py_test_delegate.sh" \
+        "${PYTHON_BIN_PATH}" "${PY_TEST_DIR}/${TEST_BASENAME}" "${TEST_LOG}" &
+    else
+      "${SCRIPT_DIR}/py_test_delegate.sh" \
+        "${PYTHON_BIN_PATH}" "${PY_TEST_DIR}/${TEST_BASENAME}" "${TEST_LOG}" &
+    fi
 
     if [[ "${TEST_COUNTER}" -ge "${N_PAR_TESTS}" ]]; then
       # Run in exclusive mode

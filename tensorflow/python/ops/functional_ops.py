@@ -30,8 +30,10 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from tensorflow.python.framework import common_shapes
 from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import ops
+from tensorflow.python.framework import sparse_tensor
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
@@ -89,7 +91,7 @@ def foldl(fn, elems, initializer=None, parallel_iterations=10, back_prop=True,
   if not callable(fn):
     raise TypeError("fn must be callable.")
 
-  with ops.op_scope([elems], name, "foldl"):
+  with ops.name_scope(name, "foldl", [elems]):
     # Any get_variable calls in fn will cache the first call locally
     # and not issue repeated network I/O requests for each iteration.
     varscope = vs.get_variable_scope()
@@ -169,7 +171,7 @@ def foldr(fn, elems, initializer=None, parallel_iterations=10, back_prop=True,
   if not callable(fn):
     raise TypeError("fn must be callable.")
 
-  with ops.op_scope([elems], name, "foldr"):
+  with ops.name_scope(name, "foldr", [elems]):
     # Any get_variable calls in fn will cache the first call locally
     # and not issue repeated network I/O requests for each iteration.
     varscope = vs.get_variable_scope()
@@ -209,7 +211,7 @@ def foldr(fn, elems, initializer=None, parallel_iterations=10, back_prop=True,
 
 
 def map_fn(fn, elems, dtype=None, parallel_iterations=10, back_prop=True,
-           swap_memory=False, name=None):
+           swap_memory=False, infer_shape=True, name=None):
   """map on the list of tensors unpacked from `elems` on dimension 0.
 
   The simplest version of `map` repeatedly applies the callable `fn` to a
@@ -233,6 +235,22 @@ def map_fn(fn, elems, dtype=None, parallel_iterations=10, back_prop=True,
   the `dtype` parameter is not optional: `dtype` must be a type or (possibly
   nested) tuple of types matching the output of `fn`.
 
+  To apply a functional operation to the nonzero elements of a SparseTensor
+  one of the following methods is recommended. First, if the function is
+  expressible as TensorFlow ops, use
+
+  ```python
+    result = SparseTensor(input.indices, fn(input.values), input.shape)
+  ```
+
+  If, however, the function is not expressible as a TensorFlow op, then use
+
+  ```python
+  result = SparseTensor(input.indices, map_fn(fn, input.values), input.shape)
+  ```
+
+  instead.
+
   Args:
     fn: The callable to be performed.  It accepts one argument, which will
       have the same (possibly nested) structure as `elems`.  Its output
@@ -248,6 +266,7 @@ def map_fn(fn, elems, dtype=None, parallel_iterations=10, back_prop=True,
       in parallel.
     back_prop: (optional) True enables support for back propagation.
     swap_memory: (optional) True enables GPU-CPU memory swapping.
+    infer_shape: (optional) False disables tests for consistent output shapes.
     name: (optional) Name prefix for the returned tensors.
 
   Returns:
@@ -257,7 +276,7 @@ def map_fn(fn, elems, dtype=None, parallel_iterations=10, back_prop=True,
 
   Raises:
     TypeError: if `fn` is not callable or the structure of the output of
-      `fn` and `dtype` do not match.
+      `fn` and `dtype` do not match, or if elems is a SparseTensor.
     ValueError: if the lengths of the output of `fn` and `dtype` do not match.
 
   Examples:
@@ -283,6 +302,12 @@ def map_fn(fn, elems, dtype=None, parallel_iterations=10, back_prop=True,
   if not callable(fn):
     raise TypeError("fn must be callable.")
 
+  if isinstance(elems, sparse_tensor.SparseTensor):
+    raise TypeError(
+        "To perform a map on the values of a sparse tensor use either "
+        " SparseTensor(input.indices, fn(input.values), input.shape) or "
+        " SparseTensor(input.indices, map_fn(fn, input.values), input.shape)")
+
   input_is_sequence = nest.is_sequence(elems)
   input_flatten = lambda x: nest.flatten(x) if input_is_sequence else [x]
   def input_pack(x):
@@ -301,7 +326,7 @@ def map_fn(fn, elems, dtype=None, parallel_iterations=10, back_prop=True,
 
   elems_flat = input_flatten(elems)
 
-  with ops.op_scope(elems_flat, name, "map"):
+  with ops.name_scope(name, "map", elems_flat):
     # Any get_variable calls in fn will cache the first call locally
     # and not issue repeated network I/O requests for each iteration.
     varscope = vs.get_variable_scope()
@@ -335,7 +360,7 @@ def map_fn(fn, elems, dtype=None, parallel_iterations=10, back_prop=True,
     accs_ta = [
         tensor_array_ops.TensorArray(dtype=dt, size=n,
                                      dynamic_size=False,
-                                     infer_shape=True)
+                                     infer_shape=infer_shape)
         for dt in dtype_flat]
 
     def compute(i, tas):
@@ -380,7 +405,7 @@ def map_fn(fn, elems, dtype=None, parallel_iterations=10, back_prop=True,
 
 
 def scan(fn, elems, initializer=None, parallel_iterations=10, back_prop=True,
-         swap_memory=False, name=None):
+         swap_memory=False, infer_shape=True, name=None):
   """scan on the list of tensors unpacked from `elems` on dimension 0.
 
   The simplest version of `scan` repeatedly applies the callable `fn` to a
@@ -415,9 +440,9 @@ def scan(fn, elems, initializer=None, parallel_iterations=10, back_prop=True,
 
   Args:
     fn: The callable to be performed.  It accepts two arguments.  The first
-      will have the same (possibly nested) structure as `elems`.  The second
       will have the same structure as `initializer` if one is provided,
-      otherwise it will have the same structure as `elems`.  Its output
+      otherwise it will have the same structure as `elems`.  The second
+      will have the same (possibly nested) structure as `elems`.  Its output
       must have the same structure as `initializer` if one is provided,
       otherwise it must have the same structure as `elems`.
     elems: A tensor or (possibly nested) sequence of tensors, each of which
@@ -429,6 +454,7 @@ def scan(fn, elems, initializer=None, parallel_iterations=10, back_prop=True,
       in parallel.
     back_prop: (optional) True enables support for back propagation.
     swap_memory: (optional) True enables GPU-CPU memory swapping.
+    infer_shape: (optional) False disables tests for consistent output shapes.
     name: (optional) Name prefix for the returned tensors.
 
   Returns:
@@ -485,7 +511,7 @@ def scan(fn, elems, initializer=None, parallel_iterations=10, back_prop=True,
 
   elems_flat = input_flatten(elems)
 
-  with ops.op_scope(elems_flat, name, "scan"):
+  with ops.name_scope(name, "scan", elems_flat):
     # Any get_variable calls in fn will cache the first call locally
     # and not issue repeated network I/O requests for each iteration.
     varscope = vs.get_variable_scope()
@@ -523,7 +549,7 @@ def scan(fn, elems, initializer=None, parallel_iterations=10, back_prop=True,
     accs_ta = [
         tensor_array_ops.TensorArray(dtype=init.dtype, size=n,
                                      dynamic_size=False,
-                                     infer_shape=True)
+                                     infer_shape=infer_shape)
         for init in a_flat]
 
     if initializer is None:
@@ -574,9 +600,4 @@ def scan(fn, elems, initializer=None, parallel_iterations=10, back_prop=True,
     return output_pack(results_flat)
 
 
-@ops.RegisterShape("SymbolicGradient")
-def _symbolic_gradient_shape(op):
-  # Say, (u, v) = f(x, y, z), _symbolic_gradient(f) is a function of
-  # (x, y, z, du, dv) -> (dx, dy, dz). Therefore, shapes of its
-  # outputs (dx, dy, dz) are the same as (x, y, z).
-  return [op.inputs[i].get_shape() for i in range(len(op.outputs))]
+ops.RegisterShape("SymbolicGradient")(common_shapes.call_cpp_shape_fn)

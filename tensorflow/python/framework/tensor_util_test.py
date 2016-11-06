@@ -23,7 +23,7 @@ import tensorflow as tf
 
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.framework import tensor_util
-from tensorflow.python.ops import state_ops
+from tensorflow.python.ops import gen_state_ops
 
 
 class TensorUtilTest(tf.test.TestCase):
@@ -138,6 +138,23 @@ class TensorUtilTest(tf.test.TestCase):
       self.assertAllClose(np.array([[10.0, 10.0, 10.0, 10.0],
                                     [10.0, 10.0, 10.0, 10.0],
                                     [10.0, 10.0, 10.0, 10.0]], dtype=nptype), a)
+
+  def testHalf(self):
+    t = tensor_util.make_tensor_proto(np.array([10.0, 20.0], dtype=np.float16))
+    self.assertProtoEquals("""
+      dtype: DT_HALF
+      tensor_shape {
+        dim {
+          size: 2
+        }
+      }
+      half_val: 18688
+      half_val: 19712
+      """, t)
+
+    a = tensor_util.MakeNdarray(t)
+    self.assertEquals(np.float16, a.dtype)
+    self.assertAllClose(np.array([10.0, 20.0], dtype=np.float16), a)
 
   def testInt(self):
     t = tensor_util.make_tensor_proto(10)
@@ -359,6 +376,34 @@ class TensorUtilTest(tf.test.TestCase):
     self.assertEquals(np.object, a.dtype)
     self.assertAllEqual(np.array([[b"a", b"ab"], [b"abc", b"abcd"]]), a)
 
+  def testStringTuple(self):
+    t = tensor_util.make_tensor_proto((b"a", b"ab", b"abc", b"abcd"))
+    self.assertProtoEquals("""
+      dtype: DT_STRING
+      tensor_shape { dim { size: 4 } }
+      string_val: "a"
+      string_val: "ab"
+      string_val: "abc"
+      string_val: "abcd"
+      """, t)
+    a = tensor_util.MakeNdarray(t)
+    self.assertEquals(np.object, a.dtype)
+    self.assertAllEqual(np.array((b"a", b"ab", b"abc", b"abcd")), a)
+
+  def testStringNestedTuple(self):
+    t = tensor_util.make_tensor_proto(((b"a", b"ab"), (b"abc", b"abcd")))
+    self.assertProtoEquals("""
+      dtype: DT_STRING
+      tensor_shape { dim { size: 2 } dim { size: 2 } }
+      string_val: "a"
+      string_val: "ab"
+      string_val: "abc"
+      string_val: "abcd"
+      """, t)
+    a = tensor_util.MakeNdarray(t)
+    self.assertEquals(np.object, a.dtype)
+    self.assertAllEqual(np.array(((b"a", b"ab"), (b"abc", b"abcd"))), a)
+
   def testComplex64(self):
     t = tensor_util.make_tensor_proto((1+2j), dtype=tf.complex64)
     self.assertProtoEquals("""
@@ -507,7 +552,8 @@ class ConstantValueTest(tf.test.TestCase):
     self.assertAllClose(np_val, tf.contrib.util.constant_value(tf_val))
 
   def testUnknown(self):
-    tf_val = state_ops.variable_op(shape=[3, 4, 7], dtype=tf.float32)
+    tf_val = gen_state_ops._variable(shape=[3, 4, 7], dtype=tf.float32, 
+        name="tf_val", container="", shared_name="")
     self.assertIs(None, tf.contrib.util.constant_value(tf_val))
 
   def testShape(self):
@@ -526,7 +572,7 @@ class ConstantValueTest(tf.test.TestCase):
     tf_val = tf.size(tf.constant(0.0))
     c_val = tf.contrib.util.constant_value(tf_val)
     self.assertEqual(1, c_val)
-    self.assertEqual(np.int32, type(c_val))
+    self.assertEqual(np.ndarray, type(c_val))
 
   def testRank(self):
     tf_val = tf.rank(tf.constant(0.0, shape=[1, 2, 3]))
@@ -564,6 +610,17 @@ class ConstantValueTest(tf.test.TestCase):
     c_val = tf.contrib.util.constant_value(tf_val)
     self.assertIs(None, c_val)
 
+  def testPack(self):
+    inputs = [np.random.rand(4, 7) for _ in range(3)]
+    np_val = np.array(inputs)
+    tf_val = tf.stack(inputs)
+    c_val = tf.contrib.util.constant_value(tf_val)
+    self.assertAllClose(np_val, c_val)
+
+    tf_val = tf.stack([inputs[0], tf.placeholder(tf.float32), inputs[2]])
+    c_val = tf.contrib.util.constant_value(tf_val)
+    self.assertIs(None, c_val)
+
 
 class ConstantValueAsShapeTest(tf.test.TestCase):
 
@@ -583,7 +640,7 @@ class ConstantValueAsShapeTest(tf.test.TestCase):
     self.assertEqual(tf.TensorShape([1, 2, 3]), c_val)
 
   def testPack(self):
-    tf_val = tf.pack([tf.constant(16), 37, tf.placeholder(tf.int32)])
+    tf_val = tf.stack([tf.constant(16), 37, tf.placeholder(tf.int32)])
     c_val = tensor_util.constant_value_as_shape(tf_val)
     self.assertEqual([16, 37, None], c_val.as_list())
 

@@ -27,6 +27,10 @@ limitations under the License.
 
 namespace tensorflow {
 
+// Returns a summary string for RepeatedPtrFields of DebugTensorWatches.
+const string SummarizeDebugTensorWatches(
+    const protobuf::RepeatedPtrField<DebugTensorWatch>& watches);
+
 class DebugNodeInserter {
  public:
   // EXPERIMENTAL: Insert special debug ops (e.g., DebugIdentity) to graph for
@@ -94,6 +98,7 @@ class DebugNodeInserter {
                                 const string& src_copy_node_name,
                                 const DataType src_dt,
                                 const string& tensor_name,
+                                const std::vector<string>& debug_urls,
                                 const int debug_op_num,
                                 const string& debug_op_name, Node** debug_node);
 };

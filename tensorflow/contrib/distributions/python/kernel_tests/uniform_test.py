@@ -118,7 +118,8 @@ class UniformTest(tf.test.TestCase):
     with self.test_session():
       a_v = np.array([1.0, 1.0, 1.0], dtype=np.float32)
       b_v = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-      uniform = tf.contrib.distributions.Uniform(a=a_v, b=b_v)
+      uniform = tf.contrib.distributions.Uniform(
+          a=a_v, b=b_v, validate_args=True)
 
       with self.assertRaisesWithPredicateMatch(tf.errors.InvalidArgumentError,
                                                "x < y"):
@@ -207,7 +208,7 @@ class UniformTest(tf.test.TestCase):
       no_nans = tf.constant(1.0)
       nans = tf.constant(0.0) / tf.constant(0.0)
       self.assertTrue(tf.is_nan(nans).eval())
-      with_nans = tf.pack([no_nans, nans])
+      with_nans = tf.stack([no_nans, nans])
 
       pdf = uniform.pdf(with_nans)
 

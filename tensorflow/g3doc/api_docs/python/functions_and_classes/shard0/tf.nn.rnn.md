@@ -2,15 +2,16 @@
 
 Creates a recurrent neural network specified by RNNCell `cell`.
 
-##### The simplest form of RNN network generated is:
+The simplest form of RNN network generated is:
 
+```python
   state = cell.zero_state(...)
   outputs = []
   for input_ in inputs:
     output, state = cell(input_, state)
     outputs.append(output)
   return (outputs, state)
-
+```
 However, a few other options are available:
 
 An initial state can be provided.
@@ -20,11 +21,14 @@ sequence length of the minibatch (thus saving computational time),
 and properly propagates the state at an example's sequence length
 to the final state output.
 
-The dynamic calculation performed is, at time t for batch row b,
+The dynamic calculation performed is, at time `t` for batch row `b`,
+
+```python
   (output, state)(b, t) =
     (t >= sequence_length(b))
       ? (zeros(cell.output_size), states(b, sequence_length(b) - 1))
       : cell(input(b, t), state(b, t - 1))
+```
 
 ##### Args:
 
@@ -47,9 +51,10 @@ The dynamic calculation performed is, at time t for batch row b,
 ##### Returns:
 
   A pair (outputs, state) where:
-    - outputs is a length T list of outputs (one for each input), or a nested
-      tuple of such elements.
-    - state is the final state
+
+  - outputs is a length T list of outputs (one for each input), or a nested
+    tuple of such elements.
+  - state is the final state
 
 ##### Raises:
 

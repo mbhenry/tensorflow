@@ -27,9 +27,11 @@ common machine learning algorithms.
 @@convolution2d_transpose
 @@flatten
 @@fully_connected
+@@layer_norm
 @@max_pool2d
 @@one_hot_encoding
 @@repeat
+@@safe_embedding_lookup_sparse
 @@separable_convolution2d
 @@stack
 @@unit_norm
@@ -40,7 +42,8 @@ available: `relu`, `relu6` and `linear`.
 ## Regularizers
 
 Regularization can help prevent overfitting. These have the signature
-`fn(weights)`. The loss is typically added to `tf.GraphKeys.REGULARIZATION_LOSS`
+`fn(weights)`. The loss is typically added to
+`tf.GraphKeys.REGULARIZATION_LOSSES`.
 
 @@apply_regularization
 @@l1_regularizer
@@ -76,6 +79,25 @@ The layers module defines convenience functions `summarize_variables`,
 of `summarize_collection` to `VARIABLES`, `WEIGHTS` and `BIASES`, respectively.
 
 @@summarize_activations
+
+## Feature columns
+
+Feature columns provide a mechanism to map data to a model.
+
+@@bucketized_column
+@@create_feature_spec_for_parsing
+@@crossed_column
+@@embedding_column
+@@hashed_embedding_column
+@@make_place_holder_tensors_for_base_features
+@@one_hot_column
+@@real_valued_column
+@@shared_embedding_columns
+@@sparse_column_with_hash_bucket
+@@sparse_column_with_integerized_feature
+@@sparse_column_with_keys
+@@weighted_sparse_column
+
 """
 
 from __future__ import absolute_import
@@ -86,6 +108,7 @@ import sys
 
 # pylint: disable=unused-import,wildcard-import
 from tensorflow.contrib.layers.python.layers import *
+from tensorflow.contrib.layers.python.ops import sparse_ops
 from tensorflow.python.util.all_util import make_all
 
 __all__ = make_all(__name__)

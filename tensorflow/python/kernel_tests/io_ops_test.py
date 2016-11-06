@@ -31,12 +31,25 @@ class IoOpsTest(tf.test.TestCase):
     cases = ['', 'Some contents', 'Неки садржаји на српском']
     for contents in cases:
       contents = tf.compat.as_bytes(contents)
-      temp = tempfile.NamedTemporaryFile(prefix='ReadFileTest')
+      temp = tempfile.NamedTemporaryFile(
+          prefix='ReadFileTest', dir=self.get_temp_dir())
       open(temp.name, 'wb').write(contents)
       with self.test_session():
         read = tf.read_file(temp.name)
         self.assertEqual([], read.get_shape())
         self.assertEqual(read.eval(), contents)
+
+  def testWriteFile(self):
+    cases = ['', 'Some contents']
+    for contents in cases:
+      contents = tf.compat.as_bytes(contents)
+      temp = tempfile.NamedTemporaryFile(
+          prefix='WriteFileTest', dir=self.get_temp_dir())
+      with self.test_session() as sess:
+        w = tf.write_file(temp.name, contents)
+        sess.run(w)
+        file_contents = open(temp.name, 'rb').read()
+        self.assertEqual(file_contents, contents)
 
   def _subset(self, files, indices):
     return set(tf.compat.as_bytes(files[i].name)
@@ -45,7 +58,8 @@ class IoOpsTest(tf.test.TestCase):
   def testMatchingFiles(self):
     cases = ['ABcDEF.GH', 'ABzDEF.GH', 'ABasdfjklDEF.GH', 'AB3DEF.GH',
              'AB4DEF.GH', 'ABDEF.GH', 'XYZ']
-    files = [tempfile.NamedTemporaryFile(prefix=c) for c in cases]
+    files = [tempfile.NamedTemporaryFile(
+        prefix=c, dir=self.get_temp_dir()) for c in cases]
 
     with self.test_session():
       # Test exact match without wildcards.

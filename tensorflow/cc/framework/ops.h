@@ -19,25 +19,41 @@ limitations under the License.
 #include <type_traits>
 
 #include "tensorflow/core/framework/tensor.h"
-// TBD(keveman): This is going to be moved to //third_party/tensorflow
-// eventually. Remove the NOLINT comment when moving.
-#include "tensorflow/core/framework/tensor.pb.h"  // NOLINT
+#include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/graph/graph.h"
+#include "tensorflow/core/lib/hash/hash.h"
+#include "tensorflow/core/lib/strings/strcat.h"
 
 namespace tensorflow {
 namespace ops {
+
+class Output;
 
 // Represents a node in the computation graph.
 class Operation {
  public:
   Operation() : node_(nullptr) {}
-  explicit Operation(Node* n) : node_(n) {}
+  explicit Operation(Node* n);
+
+  int num_inputs() const { return node_->num_inputs(); }
+  DataType input_type(int o) const { return node_->input_type(o); }
+  Output input(int i) const;
 
   int num_outputs() const { return node_->num_outputs(); }
   DataType output_type(int o) const { return node_->output_type(o); }
+  Output output(int i) const;
+
   Node* node() const { return node_; }
 
+  uint64 hash(int64 index) const;
+
+  bool operator==(const Operation& other) const { return node_ == other.node_; }
+
  private:
+  typedef std::vector<std::pair<Node*, int64>> Inputs;
+  static Inputs GetInputs(Node* node);
+
+  Inputs inputs_;
   Node* node_;
 };
 
@@ -53,10 +69,23 @@ class Output {
   Node* node() const { return op().node(); }
   int64 index() const { return index_; }
   DataType type() const { return op_.output_type(index_); }
+  string name() const { return strings::StrCat(node()->name(), ":", index()); }
+  bool operator==(const Output& other) const {
+    return op_ == other.op_ && index_ == other.index_;
+  }
+
+  uint64 hash() const { return op_.hash(index_); }
 
  private:
   Operation op_ = Operation(nullptr);
   int64 index_ = 0;
+};
+
+struct OutputHash {
+  std::size_t operator()(const Output& output) const {
+    return Hash64Combine(std::hash<Node*>()(output.node()),
+                         std::hash<int64>()(output.index()));
+  }
 };
 
 // Represents a tensor value that can be used as an operand to an Operation.
@@ -66,7 +95,7 @@ class Input {
   // constants such as simple primitive constants and nested initializer lists
   // representing a multi-dimensional array. Initializer constructors are all
   // templates, so the aforementioned kinds of C++ constants can be used to
-  // construct an Initializer. Intializer stores the value it got constructed
+  // construct an Initializer. Initializer stores the value it got constructed
   // with in a Tensor object.
   struct Initializer {
     // Construct from a scalar value of an arithmetic type or a type that can be
@@ -81,7 +110,7 @@ class Input {
       tensor = t;
     }
 
-    explicit Initializer(const Tensor& t) : tensor(t) {}
+    Initializer(const Tensor& t) : tensor(t) {}  // NOLINT(runtime/explicit)
 
     // Construct from a scalar value and an explicit shape
     template <typename T, typename = typename std::enable_if<
@@ -127,7 +156,7 @@ class Input {
     }
 
     // Construct a multi-dimensional tensor from a nested initializer list. Note
-    // that C++ syntax allows nesting of arbitrarily typed intializer lists, so
+    // that C++ syntax allows nesting of arbitrarily typed initializer lists, so
     // such invalid initializers cannot be disallowed at compile time. This
     // function performs checks to make sure that the nested initializer list is
     // indeed a valid multi-dimensional tensor.

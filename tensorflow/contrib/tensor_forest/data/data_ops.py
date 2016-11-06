@@ -17,14 +17,15 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import math
 import threading
 
 from tensorflow.contrib.tensor_forest.python import constants
 
+from tensorflow.python.framework import common_shapes
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import load_library
 from tensorflow.python.framework import ops
+from tensorflow.python.framework import sparse_tensor
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import sparse_ops
@@ -36,20 +37,12 @@ DATA_OPS_FILE = '_data_ops.so'
 _data_ops = None
 _ops_lock = threading.Lock()
 
-ops.NoGradient('SparseValuesToIndices')
-ops.NoGradient('StringToFloat')
+ops.NotDifferentiable('SparseValuesToIndices')
+ops.NotDifferentiable('StringToFloat')
 
 
-@ops.RegisterShape('SparseValuesToIndices')
-def SparseValuesToIndicesShape(op):
-  """Shape function for SparseValuesToIndices Op."""
-  return [op.inputs[0].get_shape(), op.inputs[1].get_shape()]
-
-
-@ops.RegisterShape('StringToFloat')
-def StringToFloatShape(op):
-  """Shape function for StringToFloat Op."""
-  return [op.inputs[0].get_shape()]
+ops.RegisterShape('SparseValuesToIndices')(common_shapes.call_cpp_shape_fn)
+ops.RegisterShape('StringToFloat')(common_shapes.call_cpp_shape_fn)
 
 
 # Workaround for the fact that importing tensorflow imports contrib
@@ -73,76 +66,54 @@ def Load():
 def _ParseSparse(data):
   """Concat sparse tensors together.
 
-  A common use of sparse tensors is to treat strings as a sparse bit vector
-  with a large number of features representing the presence of all possible
-  values.  Here we convert these strings to integer indices in a sparse bit
-  tensor.  In order to pack each incoming feature into a single sparse tensor,
-  we add an offset to the converted indices to indicate that they came from
-  different features in the source data.
-
   Args:
     data: A dict of name -> Tensor.
 
   Returns:
-    A single sparse tensor with float values and a 1-D input spec Tensor.
+    A single sparse tensor and a 1-D input spec Tensor.
 
   Raises:
-    NotImplementedError:  Combining dense and sparse tensors is not yet
+    NotImplementedError:  Combining dense and sparse tensors is not
       supported.
     ValueError: If data contains non-string Tensors.
   """
-  convert_ops = Load()
-
-  # TODO(gilberth): Support mixed string/float sparse tensors.
-  # We currently only support string (categorical) data if we're using sparse
-  # tensors.
-  for v in data.values():
-    if v.dtype != dtypes.string:
-      raise ValueError('Only sparse tensors of type string are supported.')
-
-  # Sparse tensor indices have 63 bits to use for information. We use the
-  # minimum number of these (MSBs) for the offset, and pack the rest with the
-  # actual data.
-  num_features = len(data)
-  offset_bits = int(math.ceil(math.log(num_features, 2)))
-
-  # We condense data to 31 bits, see sparse_values_to_indices.cc
-  offset_increment = int(math.pow(2, 31 - offset_bits))
-  offset = 0
-
-  sparse_tensors = []
   for k in sorted(data.keys()):
-    if isinstance(data[k], ops.SparseTensor):
-      sparse_indices = data[k].indices
-      sparse_values = data[k].values
-      new_shape = data[k].shape
+    if not isinstance(data[k], sparse_tensor.SparseTensor):
+      raise NotImplementedError(
+          'Features should be either all sparse or all dense.  Use a '
+          'feature engineering function to convert some of them.')
 
-      new_indices, new_values = convert_ops.sparse_values_to_indices(
-          sparse_indices,
-          sparse_values,
-          offset, offset_bits=offset_bits)
-    else:
-      # Convert dense to sparse.
-      raise NotImplementedError('Dense to sparse conversion not implemented.')
-
-    sparse_tensors.append(ops.SparseTensor(indices=new_indices,
-                                           values=new_values,
-                                           shape=new_shape))
-    offset += offset_increment
-
-  return (sparse_ops.sparse_concat(1, sparse_tensors),
-          [constants.DATA_ALL_CATEGORICAL])
+  data_spec = [
+      constants.DATA_CATEGORICAL if data[data.keys()[0]].dtype == dtypes.string
+      else constants.DATA_FLOAT
+  ]
+  return sparse_ops.sparse_concat(1, data.values()), data_spec
 
 
 def _ParseDense(data):
+  """Return a single flat tensor, keys, and a data spec list.
+
+  Args:
+    data: A dict mapping feature names to Tensors.
+
+  Returns:
+    A tuple of (single dense float Tensor, keys tensor (if exists), data spec).
+  """
   convert_ops = Load()
-  data_spec = [constants.DATA_CATEGORICAL if data[k].dtype == dtypes.string else
-               constants.DATA_FLOAT for k in sorted(data.keys())]
+  data_spec = [constants.DATA_CATEGORICAL if (data[k].dtype == dtypes.string or
+                                              data[k].dtype == dtypes.int32 or
+                                              data[k].dtype == dtypes.int64)
+               else constants.DATA_FLOAT for k in sorted(data.keys())]
   data_spec = [constants.DATA_FLOAT] + data_spec
-  return array_ops.concat(1, [
-      convert_ops.string_to_float(data[k]) if data[k].dtype == dtypes.string
-      else data[k] for k in sorted(data.keys())
-  ]), data_spec
+  features = []
+  for k in sorted(data.keys()):
+    if data[k].dtype == dtypes.string:
+      features.append(convert_ops.string_to_float(data[k]))
+    elif data[k].dtype == dtypes.int64 or data[k].dtype == dtypes.int32:
+      features.append(math_ops.to_float(data[k]))
+    else:
+      features.append(data[k])
+  return array_ops.concat(1, features), data_spec
 
 
 def ParseDataTensorOrDict(data):
@@ -155,14 +126,15 @@ def ParseDataTensorOrDict(data):
     data: `Tensor` or `dict` of `Tensor` objects.
 
   Returns:
-    A 2-D tensor for input to tensor_forest and a 1-D tensor of the
-      type of each column (e.g. continuous float, categorical).
+    A 2-D tensor for input to tensor_forest, a keys tensor for the
+    tf.Examples if they exist, and a list of the type of each column
+    (e.g. continuous float, categorical).
   """
   if isinstance(data, dict):
     # If there's at least one sparse tensor, everything has to be sparse.
     is_sparse = False
     for v in data.values():
-      if isinstance(v, ops.SparseTensor):
+      if isinstance(v, sparse_tensor.SparseTensor):
         is_sparse = True
         break
     if is_sparse:
@@ -170,7 +142,7 @@ def ParseDataTensorOrDict(data):
     else:
       return _ParseDense(data)
   else:
-    return data, [constants.DATA_FLOAT] * data.get_shape().as_list()[1]
+    return (data, [constants.DATA_FLOAT] * data.get_shape().as_list()[1])
 
 
 def ParseLabelTensorOrDict(labels):
@@ -190,11 +162,11 @@ def ParseLabelTensorOrDict(labels):
   """
   if isinstance(labels, dict):
     return math_ops.to_float(array_ops.concat(
-        1, [sparse_ops.sparse_tensor_to_dense(labels[
-            k], default_value=-1) if isinstance(labels, ops.SparseTensor) else
-            labels[k] for k in sorted(labels.keys())]))
+        1, [sparse_ops.sparse_tensor_to_dense(labels[k], default_value=-1)
+            if isinstance(labels, sparse_tensor.SparseTensor)
+            else labels[k] for k in sorted(labels.keys())]))
   else:
-    if isinstance(labels, ops.SparseTensor):
+    if isinstance(labels, sparse_tensor.SparseTensor):
       return math_ops.to_float(sparse_ops.sparse_tensor_to_dense(
           labels, default_value=-1))
     else:

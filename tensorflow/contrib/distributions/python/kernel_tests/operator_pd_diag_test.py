@@ -17,14 +17,17 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import abc
 import numpy as np
+import six
 import tensorflow as tf
 
 from tensorflow.contrib.distributions.python.ops import operator_pd_diag
 from tensorflow.contrib.distributions.python.ops import operator_test_util
 
 
-class OperatorPDSqrtDiagTest(operator_test_util.OperatorPDDerivedClassTest):
+@six.add_metaclass(abc.ABCMeta)
+class OperatorPDDiagBaseTest(object):
 
   def setUp(self):
     self._rng = np.random.RandomState(42)
@@ -32,8 +35,14 @@ class OperatorPDSqrtDiagTest(operator_test_util.OperatorPDDerivedClassTest):
   def _random_pd_diag(self, diag_shape):
     return self._rng.rand(*diag_shape) + 0.1
 
+  @abc.abstractmethod
   def _diag_to_matrix(self, diag):
-    return tf.batch_matrix_diag(diag**2).eval()
+    pass
+
+  @abc.abstractproperty
+  def operator_class(self):
+    # Return the operator class that this tests.
+    pass
 
   def _build_operator_and_mat(self, batch_shape, k, dtype=np.float64):
     # Create a diagonal matrix explicitly.
@@ -46,19 +55,19 @@ class OperatorPDSqrtDiagTest(operator_test_util.OperatorPDDerivedClassTest):
     # The diag is the square root.
     diag = self._random_pd_diag(diag_shape).astype(dtype)
     mat = self._diag_to_matrix(diag).astype(dtype)
-    operator = operator_pd_diag.OperatorPDSqrtDiag(diag)
+    operator = self.operator_class(diag)
 
     return operator, mat
 
-  def test_non_positive_definite_matrix_raises(self):
+  def testNonPositiveDefiniteMatrixRaises(self):
     # Singlular matrix with one positive eigenvalue and one zero eigenvalue.
     with self.test_session():
       diag = [1.0, 0.0]
       operator = operator_pd_diag.OperatorPDSqrtDiag(diag)
-      with self.assertRaisesOpError('assert_positive'):
+      with self.assertRaisesOpError("assert_positive"):
         operator.to_dense().eval()
 
-  def test_non_positive_definite_matrix_does_not_raise_if_not_verify_pd(self):
+  def testNonPositiveDefiniteMatrixDoesNotRaiseIfNotVerifyPd(self):
     # Singlular matrix with one positive eigenvalue and one zero eigenvalue.
     with self.test_session():
       diag = [1.0, 0.0]
@@ -66,5 +75,29 @@ class OperatorPDSqrtDiagTest(operator_test_util.OperatorPDDerivedClassTest):
       operator.to_dense().eval()  # Should not raise
 
 
-if __name__ == '__main__':
+class OperatorPDDiagTest(
+    OperatorPDDiagBaseTest, operator_test_util.OperatorPDDerivedClassTest):
+  """Most tests done in the base classes."""
+
+  def _diag_to_matrix(self, diag):
+    return tf.matrix_diag(diag).eval()
+
+  @property
+  def operator_class(self):
+    return operator_pd_diag.OperatorPDDiag
+
+
+class OperatorPDSqrtDiagTest(
+    OperatorPDDiagBaseTest, operator_test_util.OperatorPDDerivedClassTest):
+  """Most tests done in the base classes."""
+
+  def _diag_to_matrix(self, diag):
+    return tf.matrix_diag(diag**2).eval()
+
+  @property
+  def operator_class(self):
+    return operator_pd_diag.OperatorPDSqrtDiag
+
+
+if __name__ == "__main__":
   tf.test.main()

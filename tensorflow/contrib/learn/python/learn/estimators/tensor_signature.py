@@ -22,7 +22,7 @@ from __future__ import print_function
 import collections
 
 from tensorflow.python.framework import dtypes
-from tensorflow.python.framework import ops
+from tensorflow.python.framework import sparse_tensor
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
@@ -41,7 +41,7 @@ class TensorSignature(collections.namedtuple(
   """
 
   def __new__(cls, tensor):
-    if isinstance(tensor, ops.SparseTensor):
+    if isinstance(tensor, sparse_tensor.SparseTensor):
       return super(TensorSignature, cls).__new__(
           cls, dtype=tensor.values.dtype, shape=None, is_sparse=True)
     return super(TensorSignature, cls).__new__(
@@ -51,7 +51,11 @@ class TensorSignature(collections.namedtuple(
     """Returns True if signatures are compatible."""
 
     def _shape_is_compatible_0dim(this, other):
+      """Checks that shapes are compatible skipping dim 0."""
       other = tensor_shape.as_shape(other)
+      # If shapes are None (unknown) they may be compatible.
+      if this.dims is None or other.dims is None:
+        return True
       if this.ndims != other.ndims:
         return False
       for dim, (x_dim, y_dim) in enumerate(zip(this.dims, other.dims)):

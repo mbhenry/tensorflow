@@ -18,6 +18,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import collections
 import threading
 import time
 
@@ -32,11 +33,13 @@ from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import errors
 from tensorflow.python.framework import ops
+from tensorflow.python.framework import sparse_tensor
 from tensorflow.python.framework import tensor_util
 from tensorflow.python.framework import test_util
 from tensorflow.python.framework import versions
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
+from tensorflow.python.ops import data_flow_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import state_ops
 from tensorflow.python.ops import variables
@@ -180,6 +183,213 @@ class SessionTest(test_util.TensorFlowTestCase):
       with self.assertRaises(TypeError):
         s.run({'a': a, 'b': None})
 
+  def testFetchSingleton(self):
+    with session.Session() as sess:
+      a = constant_op.constant(42.0)
+      res = sess.run(a)
+      self.assertEqual(42.0, res)
+      res = sess.run(a.op)  # An op, not a tensor.
+      self.assertEqual(None, res)
+
+  def testFetchSingletonByName(self):
+    with session.Session() as sess:
+      a = constant_op.constant(42.0)
+      res = sess.run(a.name)
+      self.assertEqual(42.0, res)
+      res = sess.run(a.op)  # An op, not a tensor.
+      self.assertEqual(None, res)
+
+  def testFetchList(self):
+    with session.Session() as sess:
+      a = constant_op.constant(42.0)
+      b = control_flow_ops.no_op()  # An op, not a tensor.
+      c = constant_op.constant(44.0)
+      v = variables.Variable([54.0])
+      assign = v.assign([63.0])
+      res = sess.run([a, b, c, a.name, assign.op])
+      self.assertTrue(isinstance(res, list))
+      self.assertEqual(42.0, res[0])
+      self.assertEqual(None, res[1])
+      self.assertEqual(44.0, res[2])
+      self.assertEqual(42.0, res[3])
+      self.assertEqual(None, res[4])
+      self.assertEqual(63.0, sess.run(v))
+
+  def testFetchTuple(self):
+    with session.Session() as sess:
+      a = constant_op.constant(42.0)
+      b = control_flow_ops.no_op()  # An op, not a tensor.
+      c = constant_op.constant(44.0)
+      res = sess.run((a, b, c, a.name))
+      self.assertTrue(isinstance(res, tuple))
+      self.assertEqual(42.0, res[0])
+      self.assertEqual(None, res[1])
+      self.assertEqual(44.0, res[2])
+      self.assertEqual(42.0, res[3])
+
+  def testFetchNamedTuple(self):
+    # pylint: disable=invalid-name
+    ABC = collections.namedtuple('ABC', ['a', 'b', 'c'])
+    # pylint: enable=invalid-name
+    with session.Session() as sess:
+      a = constant_op.constant(42.0)
+      b = control_flow_ops.no_op()  # An op, not a tensor.
+      c = constant_op.constant(44.0)
+      res = sess.run(ABC(a, b, c))
+      self.assertTrue(isinstance(res, ABC))
+      self.assertEqual(42.0, res.a)
+      self.assertEqual(None, res.b)
+      self.assertEqual(44.0, res.c)
+
+  def testFetchDict(self):
+    with session.Session() as sess:
+      a = constant_op.constant(42.0)
+      b = control_flow_ops.no_op()  # An op, not a tensor.
+      c = constant_op.constant(44.0)
+      res = sess.run({'a': a, 'b': b, 'c': c})
+      self.assertTrue(isinstance(res, dict))
+      self.assertEqual(42.0, res['a'])
+      self.assertEqual(None, res['b'])
+      self.assertEqual(44.0, res['c'])
+
+  def testFetchNestingEmptyOneLevel(self):
+    with session.Session() as sess:
+      a_val = 11.0
+      a = constant_op.constant(a_val)
+
+      res = sess.run([[], tuple(), {}])
+      self.assertTrue(isinstance(res, list))
+      self.assertEquals(3, len(res))
+      self.assertTrue(isinstance(res[0], list))
+      self.assertEqual(0, len(res[0]))
+      self.assertTrue(isinstance(res[1], tuple))
+      self.assertEqual(0, len(res[1]))
+      self.assertTrue(isinstance(res[2], dict))
+      self.assertEqual(0, len(res[2]))
+
+      res = sess.run([[], tuple(), {}, a])
+      self.assertTrue(isinstance(res, list))
+      self.assertEquals(4, len(res))
+      self.assertTrue(isinstance(res[0], list))
+      self.assertEqual(0, len(res[0]))
+      self.assertTrue(isinstance(res[1], tuple))
+      self.assertEqual(0, len(res[1]))
+      self.assertTrue(isinstance(res[2], dict))
+      self.assertEqual(0, len(res[2]))
+      self.assertEqual(a_val, res[3])
+
+  def testFetchNestingOneLevel(self):
+    with session.Session() as sess:
+      # pylint: disable=invalid-name
+      ABC = collections.namedtuple('ABC', ['a', 'b', 'c'])
+      DEFG = collections.namedtuple('DEFG', ['d', 'e', 'f', 'g'])
+      # pylint: enable=invalid-name
+      a_val = 42.0
+      b_val = None
+      c_val = 44.0
+      a = constant_op.constant(a_val)
+      b = control_flow_ops.no_op()  # An op, not a tensor.
+      c = constant_op.constant(c_val)
+      # List of lists, tuples, namedtuple, and  dict
+      res = sess.run([[a, b, c], (a, b, c), ABC(a=a, b=b, c=c),
+                      {'a': a.name, 'c': c, 'b': b}])
+      self.assertTrue(isinstance(res, list))
+      self.assertEqual(4, len(res))
+      self.assertTrue(isinstance(res[0], list))
+      self.assertEqual(3, len(res[0]))
+      self.assertEqual(a_val, res[0][0])
+      self.assertEqual(b_val, res[0][1])
+      self.assertEqual(c_val, res[0][2])
+      self.assertTrue(isinstance(res[1], tuple))
+      self.assertEqual(3, len(res[1]))
+      self.assertEqual(a_val, res[1][0])
+      self.assertEqual(b_val, res[1][1])
+      self.assertEqual(c_val, res[1][2])
+      self.assertTrue(isinstance(res[2], ABC))
+      self.assertEqual(a_val, res[2].a)
+      self.assertEqual(b_val, res[2].b)
+      self.assertEqual(c_val, res[2].c)
+      self.assertTrue(isinstance(res[3], dict))
+      self.assertEqual(3, len(res[3]))
+      self.assertEqual(a_val, res[3]['a'])
+      self.assertEqual(b_val, res[3]['b'])
+      self.assertEqual(c_val, res[3]['c'])
+      # Tuple of lists, tuples, namedtuple, and  dict
+      res = sess.run(([a, b, c], (a.name, b, c), ABC(a=a, b=b, c=c),
+                      {'a': a, 'c': c, 'b': b}))
+      self.assertTrue(isinstance(res, tuple))
+      self.assertEqual(4, len(res))
+      self.assertTrue(isinstance(res[0], list))
+      self.assertEqual(3, len(res[0]))
+      self.assertEqual(a_val, res[0][0])
+      self.assertEqual(b_val, res[0][1])
+      self.assertEqual(c_val, res[0][2])
+      self.assertTrue(isinstance(res[1], tuple))
+      self.assertEqual(3, len(res[1]))
+      self.assertEqual(a_val, res[1][0])
+      self.assertEqual(b_val, res[1][1])
+      self.assertEqual(c_val, res[1][2])
+      self.assertTrue(isinstance(res[2], ABC))
+      self.assertEqual(a_val, res[2].a)
+      self.assertEqual(b_val, res[2].b)
+      self.assertEqual(c_val, res[2].c)
+      self.assertTrue(isinstance(res[3], dict))
+      self.assertEqual(3, len(res[3]))
+      self.assertEqual(a_val, res[3]['a'])
+      self.assertEqual(b_val, res[3]['b'])
+      self.assertEqual(c_val, res[3]['c'])
+      # Namedtuple of lists, tuples, namedtuples, and dict
+      res = sess.run(DEFG(d=[a, b, c],
+                          e=(a, b, c),
+                          f=ABC(a=a.name, b=b, c=c),
+                          g={'a': a, 'c': c, 'b': b}))
+      self.assertTrue(isinstance(res, DEFG))
+      self.assertTrue(isinstance(res.d, list))
+      self.assertEqual(3, len(res.d))
+      self.assertEqual(a_val, res.d[0])
+      self.assertEqual(b_val, res.d[1])
+      self.assertEqual(c_val, res.d[2])
+      self.assertTrue(isinstance(res.e, tuple))
+      self.assertEqual(3, len(res.e))
+      self.assertEqual(a_val, res.e[0])
+      self.assertEqual(b_val, res.e[1])
+      self.assertEqual(c_val, res.e[2])
+      self.assertTrue(isinstance(res.f, ABC))
+      self.assertEqual(a_val, res.f.a)
+      self.assertEqual(b_val, res.f.b)
+      self.assertEqual(c_val, res.f.c)
+      self.assertTrue(isinstance(res.g, dict))
+      self.assertEqual(3, len(res.g))
+      self.assertEqual(a_val, res.g['a'])
+      self.assertEqual(b_val, res.g['b'])
+      self.assertEqual(c_val, res.g['c'])
+      # Dict of lists, tuples, namedtuples, and dict
+      res = sess.run({'d': [a, b, c],
+                      'e': (a, b, c),
+                      'f': ABC(a=a, b=b, c=c),
+                      'g': {'a': a.name, 'c': c, 'b': b}})
+      self.assertTrue(isinstance(res, dict))
+      self.assertEqual(4, len(res))
+      self.assertTrue(isinstance(res['d'], list))
+      self.assertEqual(3, len(res['d']))
+      self.assertEqual(a_val, res['d'][0])
+      self.assertEqual(b_val, res['d'][1])
+      self.assertEqual(c_val, res['d'][2])
+      self.assertTrue(isinstance(res['e'], tuple))
+      self.assertEqual(3, len(res['e']))
+      self.assertEqual(a_val, res['e'][0])
+      self.assertEqual(b_val, res['e'][1])
+      self.assertEqual(c_val, res['e'][2])
+      self.assertTrue(isinstance(res['f'], ABC))
+      self.assertEqual(a_val, res['f'].a)
+      self.assertEqual(b_val, res['f'].b)
+      self.assertEqual(c_val, res['f'].c)
+      self.assertTrue(isinstance(res['g'], dict))
+      self.assertEqual(3, len(res['g']))
+      self.assertEqual(a_val, res['g']['a'])
+      self.assertEqual(b_val, res['g']['b'])
+      self.assertEqual(c_val, res['g']['c'])
+
   def testFetchTensorObject(self):
     with session.Session() as s:
       a = constant_op.constant(1.0, shape=[1, 2])
@@ -255,7 +465,7 @@ class SessionTest(test_util.TensorFlowTestCase):
       indices = np.array([[3, 2, 0], [4, 5, 1]]).astype(np.int64)
       values = np.array([1.0, 2.0]).astype(np.float32)
       shape = np.array([7, 9, 2]).astype(np.int64)
-      sp = ops.SparseTensor(
+      sp = sparse_tensor.SparseTensor(
           constant_op.constant(indices),
           constant_op.constant(values),
           constant_op.constant(shape))
@@ -324,32 +534,44 @@ class SessionTest(test_util.TensorFlowTestCase):
       indices = np.array([[3, 2, 0], [4, 5, 1]]).astype(np.int64)
       values = np.array([1.0, 2.0]).astype(np.float32)
       shape = np.array([7, 9, 2]).astype(np.int64)
-      sp = ops.SparseTensor(
+      sp = sparse_tensor.SparseTensor(
           array_ops.placeholder(dtype=np.int64, shape=(2, 3)),
           array_ops.placeholder(dtype=np.float32, shape=(2,)),
           array_ops.placeholder(dtype=np.int64, shape=(3,)),)
       sp_indices = array_ops.identity(sp.indices)
       sp_values = array_ops.identity(sp.values)
       sp_shape = array_ops.identity(sp.shape)
-      sp2 = ops.SparseTensor(sp_indices, sp_values, sp_shape)
+      sp2 = sparse_tensor.SparseTensor(sp_indices, sp_values, sp_shape)
       # Feed with tuple
       indices_out, values_out, shape_out = s.run(
           [sp_indices, sp_values, sp_shape], {sp: (indices, values, shape)})
       self.assertAllEqual(indices_out, indices)
       self.assertAllEqual(values_out, values)
       self.assertAllEqual(shape_out, shape)
+      # Feed with tuple, fetch sp directly
+      sp_out = s.run(sp, {sp: (indices, values, shape)})
+      self.assertAllEqual(sp_out.indices, indices)
+      self.assertAllEqual(sp_out.values, values)
+      self.assertAllEqual(sp_out.shape, shape)
       # Feed with SparseTensorValue
       indices_out, values_out, shape_out = s.run(
           [sp_indices, sp_values, sp_shape],
-          {sp: ops.SparseTensorValue(indices, values, shape)})
+          {sp: sparse_tensor.SparseTensorValue(indices, values, shape)})
       self.assertAllEqual(indices_out, indices)
       self.assertAllEqual(values_out, values)
       self.assertAllEqual(shape_out, shape)
       # Feed with SparseTensorValue, fetch SparseTensorValue
-      sp2_out = s.run(sp2, {sp: ops.SparseTensorValue(indices, values, shape)})
+      sp2_out = s.run(
+          sp2, {sp: sparse_tensor.SparseTensorValue(indices, values, shape)})
       self.assertAllEqual(sp2_out.indices, indices)
       self.assertAllEqual(sp2_out.values, values)
       self.assertAllEqual(sp2_out.shape, shape)
+      # Feed SparseTensorValue and fetch sp directly.
+      sp_out = s.run(
+          sp, {sp: sparse_tensor.SparseTensorValue(indices, values, shape)})
+      self.assertAllEqual(sp_out.indices, indices)
+      self.assertAllEqual(sp_out.values, values)
+      self.assertAllEqual(sp_out.shape, shape)
 
   def testFeedSparsePlaceholder(self):
     with session.Session() as s:
@@ -360,7 +582,7 @@ class SessionTest(test_util.TensorFlowTestCase):
       sp_indices = array_ops.identity(sp.indices)
       sp_values = array_ops.identity(sp.values)
       sp_shape = array_ops.identity(sp.shape)
-      sp2 = ops.SparseTensor(sp_indices, sp_values, sp_shape)
+      sp2 = sparse_tensor.SparseTensor(sp_indices, sp_values, sp_shape)
       # Feed with tuple
       indices_out, values_out, shape_out = s.run(
           [sp_indices, sp_values, sp_shape], {sp: (indices, values, shape)})
@@ -370,17 +592,49 @@ class SessionTest(test_util.TensorFlowTestCase):
       # Feed with SparseTensorValue
       indices_out, values_out, shape_out = s.run(
           [sp_indices, sp_values, sp_shape],
-          {sp: ops.SparseTensorValue(indices, values, shape)})
+          {sp: sparse_tensor.SparseTensorValue(indices, values, shape)})
       self.assertAllEqual(indices_out, indices)
       self.assertAllEqual(values_out, values)
       self.assertAllEqual(shape_out, shape)
       # Feed with SparseTensorValue, fetch SparseTensorValue
-      sp2_out = s.run(sp2, {sp: ops.SparseTensorValue(indices, values, shape)})
+      sp2_out = s.run(
+          sp2, {sp: sparse_tensor.SparseTensorValue(indices, values, shape)})
       self.assertAllEqual(sp2_out.indices, indices)
       self.assertAllEqual(sp2_out.values, values)
       self.assertAllEqual(sp2_out.shape, shape)
 
-  def testFeedSparePlaceholderConstantShape(self):
+  def testFeedSparsePlaceholderPartialShape(self):
+    with session.Session() as s:
+      indices = np.array([[3, 2, 0], [4, 5, 1]]).astype(np.int64)
+      values = np.array([1.0, 2.0]).astype(np.float32)
+      shape = np.array([7, 9, 2]).astype(np.int64)
+      sp = array_ops.sparse_placeholder(
+          shape=[None, 9, 2], dtype=np.float32, name='placeholder1')
+      sp_indices = array_ops.identity(sp.indices)
+      sp_values = array_ops.identity(sp.values)
+      sp_shape = array_ops.identity(sp.shape)
+      sp2 = sparse_tensor.SparseTensor(sp_indices, sp_values, sp_shape)
+      # Feed with tuple
+      indices_out, values_out, shape_out = s.run(
+          [sp_indices, sp_values, sp_shape], {sp: (indices, values, shape)})
+      self.assertAllEqual(indices_out, indices)
+      self.assertAllEqual(values_out, values)
+      self.assertAllEqual(shape_out, shape)
+      # Feed with SparseTensorValue
+      indices_out, values_out, shape_out = s.run(
+          [sp_indices, sp_values, sp_shape],
+          {sp: sparse_tensor.SparseTensorValue(indices, values, shape)})
+      self.assertAllEqual(indices_out, indices)
+      self.assertAllEqual(values_out, values)
+      self.assertAllEqual(shape_out, shape)
+      # Feed with SparseTensorValue, fetch SparseTensorValue
+      sp2_out = s.run(
+          sp2, {sp: sparse_tensor.SparseTensorValue(indices, values, shape)})
+      self.assertAllEqual(sp2_out.indices, indices)
+      self.assertAllEqual(sp2_out.values, values)
+      self.assertAllEqual(sp2_out.shape, shape)
+
+  def testFeedSparsePlaceholderConstantShape(self):
     with session.Session() as s:
       indices = np.array([[3, 2, 0], [4, 5, 1]]).astype(np.int64)
       values = np.array([1.0, 2.0]).astype(np.float32)
@@ -776,9 +1030,12 @@ class SessionTest(test_util.TensorFlowTestCase):
 
   def testUseEmptyGraph(self):
     with session.Session() as sess:
-      with self.assertRaisesWithPredicateMatch(
-          RuntimeError, lambda e: 'The Session graph is empty.' in str(e)):
+      with self.assertRaisesRegexp(RuntimeError, 'The Session graph is empty.'):
         sess.run([])
+      with self.assertRaisesRegexp(RuntimeError, 'The Session graph is empty.'):
+        sess.run(())
+      with self.assertRaisesRegexp(RuntimeError, 'The Session graph is empty.'):
+        sess.run({})
 
   def testNotEntered(self):
     # pylint: disable=protected-access
@@ -869,7 +1126,7 @@ class SessionTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(a2_val, [[1.0, 1.0]])
 
   def testFeedAndFetch(self):
-    with session.Session():
+    with session.Session() as sess:
       for dtype in [dtypes.float16,
                     dtypes.float32,
                     dtypes.float64,
@@ -899,7 +1156,15 @@ class SessionTest(test_util.TensorFlowTestCase):
             np_array = np_array.astype(np_dtype)
 
           self.assertAllEqual(np_array,
-                              out_t.eval(feed_dict={feed_t: np_array}))
+                              sess.run(out_t, feed_dict={feed_t: np_array}))
+          # Check that we can also get the feed back.
+          self.assertAllEqual(np_array,
+                              sess.run(feed_t, feed_dict={feed_t: np_array}))
+          # Also check that we can get both back.
+          out_v, feed_v = sess.run([out_t, feed_t],
+                                   feed_dict={feed_t: np_array})
+          self.assertAllEqual(np_array, out_v)
+          self.assertAllEqual(np_array, feed_v)
 
   def testFeedError(self):
     with session.Session() as sess:
@@ -941,7 +1206,7 @@ class SessionTest(test_util.TensorFlowTestCase):
         self.assertAllEqual(c.eval(), c_list)
 
   def testStringFeed(self):
-    with session.Session():
+    with session.Session() as sess:
       for shape in [(32, 4, 128), (37,), (2, 0, 6), (0, 0, 0)]:
         size = 1
         for s in shape:
@@ -950,7 +1215,12 @@ class SessionTest(test_util.TensorFlowTestCase):
                           dtype=np.object).reshape(shape)
         feed_t = array_ops.placeholder(dtype=dtypes.string, shape=shape)
         c = array_ops.identity(feed_t)
-        self.assertAllEqual(c.eval(feed_dict={feed_t: c_list}), c_list)
+        self.assertAllEqual(sess.run(c, feed_dict={feed_t: c_list}), c_list)
+        self.assertAllEqual(sess.run(feed_t, feed_dict={feed_t: c_list}),
+                            c_list)
+        c_v, feed_v = sess.run([c, feed_t], feed_dict={feed_t: c_list})
+        self.assertAllEqual(c_v, c_list)
+        self.assertAllEqual(feed_v, c_list)
 
   def testStringFeedWithNullCharacters(self):
     with session.Session():
@@ -963,17 +1233,18 @@ class SessionTest(test_util.TensorFlowTestCase):
 
   def testStringFeedWithUnicode(self):
     with session.Session():
-      c_list = [u'\n\x01\x00', u'\n\x00\x01']
-      feed_t = array_ops.placeholder(dtype=dtypes.string, shape=[2])
+      c_list = [u'\n\x01\x00', u'\n\x00\x01',
+                u'\u26a3 unicode', u'\U0001f60e deal with it']
+      feed_t = array_ops.placeholder(dtype=dtypes.string, shape=[len(c_list)])
       c = array_ops.identity(feed_t)
 
       out = c.eval(feed_dict={feed_t: c_list})
-      self.assertEqual(c_list[0], out[0].decode('utf-8'))
-      self.assertEqual(c_list[1], out[1].decode('utf-8'))
+      for i in range(len(c_list)):
+        self.assertEqual(c_list[i], out[i].decode('utf-8'))
 
       out = c.eval(feed_dict={feed_t: np.array(c_list, dtype=np.object)})
-      self.assertEqual(c_list[0], out[0].decode('utf-8'))
-      self.assertEqual(c_list[1], out[1].decode('utf-8'))
+      for i in range(len(c_list)):
+        self.assertEqual(c_list[i], out[i].decode('utf-8'))
 
   def testInvalidTargetFails(self):
     with self.assertRaisesRegexp(
@@ -1184,14 +1455,6 @@ class SessionTest(test_util.TensorFlowTestCase):
       with self.assertRaisesRegexp(ValueError, 'may not be fed'):
         sess.run(reshaped_tensor, feed_dict={new_shape: [3, 7]})
 
-  def testRunWithNoTargetsIsAnError(self):
-    with session.Session() as sess:
-      _ = constant_op.constant(5.0)
-      with self.assertRaisesRegexp(
-          errors.InvalidArgumentError,
-          'Must specify at least one target to fetch or execute.'):
-        sess.run([])
-
   def testInferShapesFalse(self):
     with ops.Graph().as_default(), ops.device('/cpu:0'):
       a = constant_op.constant([[1, 2]])
@@ -1250,6 +1513,23 @@ class SessionTest(test_util.TensorFlowTestCase):
     del sess1
     del sess2
 
+  def testAsDefault(self):
+    c = constant_op.constant(37)
+    sess = session.Session()
+    with sess.as_default():
+      self.assertEqual(37, c.eval())
+
+    # Ensure that the session remains valid even when it is not captured.
+    with session.Session().as_default():
+      self.assertEqual(37, c.eval())
+
+  def testReentry(self):
+    sess = session.Session()
+    with self.assertRaisesRegexp(RuntimeError, 'not re-entrant'):
+      with sess:
+        with sess:
+          pass
+
   def testInvalidArgument(self):
     with self.assertRaisesRegexp(TypeError, 'target must be a string'):
       session.Session(37)
@@ -1257,6 +1537,20 @@ class SessionTest(test_util.TensorFlowTestCase):
       session.Session(config=37)
     with self.assertRaisesRegexp(TypeError, 'graph must be a tf.Graph'):
       session.Session(graph=37)
+
+  def testTimeoutWithShortOperations(self):
+    num_epochs = 5
+    q = data_flow_ops.FIFOQueue(
+        capacity=50, dtypes=[dtypes.int32], shapes=[()])
+    enqueue_op = q.enqueue_many(constant_op.constant([1, 2]))
+
+    # Use a 10-second timeout, which should be longer than any
+    # non-blocking enqueue_many op.
+    config = config_pb2.ConfigProto(operation_timeout_in_ms=10000)
+    with session.Session(config=config) as sess:
+      for _ in range(num_epochs):
+        sess.run(enqueue_op)
+      self.assertEqual(sess.run(q.size()), num_epochs * 2)
 
 
 if __name__ == '__main__':
