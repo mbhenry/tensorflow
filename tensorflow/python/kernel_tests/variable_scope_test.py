@@ -18,13 +18,14 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import numpy
 import tensorflow as tf
 
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import variable_scope
 
 
-class VariableStoreTest(tf.test.TestCase):
+class VariableScopeTest(tf.test.TestCase):
 
   def testGetVar(self):
     vs = variable_scope._get_default_variable_store()
@@ -67,6 +68,21 @@ class VariableStoreTest(tf.test.TestCase):
           w = tf.get_variable("w", [])
           sess.run(tf.initialize_variables([w]))
           self.assertAllClose(w.eval(), 0.3)
+
+  def testInitFromNonTensorValue(self):
+    with self.test_session() as sess:
+      v = tf.get_variable("v", initializer=4, dtype=tf.int32)
+      sess.run(tf.initialize_variables([v]))
+      self.assertAllClose(v.eval(), 4)
+
+      w = tf.get_variable("w",
+                          initializer=numpy.array([1, 2, 3]),
+                          dtype=tf.int32)
+      sess.run(tf.initialize_variables([w]))
+      self.assertAllClose(w.eval(), [1, 2, 3])
+
+      with self.assertRaises(TypeError):
+        tf.get_variable("x", initializer={})
 
   def testVarScopeCachingDevice(self):
     with self.test_session():
@@ -254,9 +270,12 @@ class VariableStoreTest(tf.test.TestCase):
         with tf.variable_scope("tower") as tower:
           with tf.name_scope("scope2") as sc2:
             self.assertEqual(sc2, "scope1/tower/scope2/")
-        with tf.variable_scope("tower"):  # Re-enter adds suffix.
+        with tf.variable_scope(tower):  # Re-entering acts like another "tower".
           with tf.name_scope("scope2") as sc2:
             self.assertEqual(sc2, "scope1/tower_1/scope2/")
+        with tf.variable_scope("tower"):  # Re-entering by string acts the same.
+          with tf.name_scope("scope2") as sc2:
+            self.assertEqual(sc2, "scope1/tower_2/scope2/")
 
       with tf.name_scope("scope3"):
         with tf.variable_scope("tower"):
@@ -271,6 +290,29 @@ class VariableStoreTest(tf.test.TestCase):
         with tf.variable_scope(root_var_scope):
           with tf.name_scope("scope2") as sc2:
             self.assertEqual(sc2, "scope4/scope2/")
+
+  def testVarScopeOriginalNameScope(self):
+    with self.test_session():
+      with tf.name_scope("scope1"):
+        with tf.variable_scope("tower") as tower:
+          self.assertEqual(tower.original_name_scope, "scope1/tower/")
+          with tf.name_scope("scope2") as sc2:
+            self.assertEqual(sc2, "scope1/tower/scope2/")
+      with tf.name_scope("scope2"):
+        with tf.variable_scope(tower) as tower1:
+          # Re-entering preserves original name scope.
+          self.assertEqual(tower1.original_name_scope, "scope1/tower/")
+          with tf.name_scope("foo") as sc2:
+            self.assertEqual(sc2, "scope2/tower/foo/")
+        # Test re-entering original name scope.
+        with tf.name_scope(tower.original_name_scope):
+          with tf.name_scope("bar") as sc3:
+            self.assertEqual(sc3, "scope1/tower/bar/")
+      with tf.name_scope("scope2"):
+        with tf.variable_scope(tower):
+          with tf.name_scope(tower.original_name_scope):
+            with tf.name_scope("bar") as sc3:
+              self.assertEqual(sc3, "scope1/tower/bar_1/")
 
   def testVarScopeObjectReuse(self):
     with self.test_session():
@@ -599,8 +641,13 @@ class VariableScopeWithPartitioningTest(tf.test.TestCase):
       v = tf.get_variable("name0", shape=(3, 1, 1))
     with tf.variable_scope("scope0", reuse=True):
       v_reused = tf.get_variable("name0")
-
     self.assertEqual(v, v_reused)
+
+  def testPropagatePartitionerOnReopening(self):
+    with tf.variable_scope("scope0", partitioner=axis0_into2_partitioner) as vs:
+      self.assertEqual(axis0_into2_partitioner, vs.partitioner)
+      with tf.variable_scope(vs) as vs1:
+        self.assertEqual(axis0_into2_partitioner, vs1.partitioner)
 
   def testPartitionConcatenatesAlongCorrectAxis(self):
     def _part_axis_0(**unused_kwargs):
